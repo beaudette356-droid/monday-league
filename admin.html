@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>League admin · The Bunker East Monday League</title>
+<meta name="robots" content="noindex">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="admin-top">
+  <div class="wrap">
+    <a class="brand" href="book.html">
+      <svg width="40" height="40" viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="19" fill="#f3e1b3"/><ellipse cx="20" cy="29" rx="12" ry="4" fill="#2f7d4f"/><line x1="18" y1="29" x2="18" y2="8" stroke="#0e3b2c" stroke-width="2"/><path d="M18 8 L30 12 L18 16 Z" fill="#e0402a"/></svg>
+      <span style="display:flex;flex-direction:column;line-height:1.1"><span class="brand-name" style="font-size:22px">THE BUNKER EAST</span><span class="small" style="color:#cfe3d6">League admin</span></span>
+    </a>
+    <div style="display:flex;gap:16px;align-items:center;font-size:14px;flex-wrap:wrap">
+      <span style="background:var(--flag);padding:4px 10px;border-radius:999px;font-weight:700;font-size:12px">Organizer</span>
+      <a href="book.html" style="color:#fff;font-weight:600">Back to booking</a>
+      <button type="button" class="header-link" data-signout>Sign out</button>
+    </div>
+  </div>
+</header>
+
+<main class="admin-main wrap">
+  <div style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end;justify-content:space-between">
+    <div><h1 style="font-size:48px">League admin</h1><p class="muted" style="margin:6px 0 0">Only organizer accounts can open this page.</p></div>
+    <div class="kpis" id="kpis"></div>
+  </div>
+  <nav class="tabs" role="tablist" aria-label="Admin sections">
+    <button type="button" class="tab" role="tab" data-tab="players" aria-selected="true">Players</button>
+    <button type="button" class="tab" role="tab" data-tab="courses" aria-selected="false">Weekly courses</button>
+    <button type="button" class="tab" role="tab" data-tab="bookings" aria-selected="false">Bookings</button>
+    <button type="button" class="tab" role="tab" data-tab="settings" aria-selected="false">Settings</button>
+  </nav>
+  <div id="panel" role="tabpanel"><div class="loading">Loading…</div></div>
+</main>
+<script type="module" src="admin.js"></script>
+</body>
+</html>

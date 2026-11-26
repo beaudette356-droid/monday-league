@@ -1,0 +1,94 @@
+rules_version = '2';
+
+// The Bunker East – Monday League
+// Paste this whole file into Firebase console › Firestore Database › Rules, then Publish.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function me() { return request.auth.uid; }
+    function isAdmin() { return signedIn() && exists(/databases/$(database)/documents/admins/$(me())); }
+    function isMember() { return signedIn() && exists(/databases/$(database)/documents/players/$(me())); }
+    function myName() { return get(/databases/$(database)/documents/players/$(me())).data.name; }
+    function leagueCode() { return get(/databases/$(database)/documents/secrets/league).data.code; }
+
+    // League password. Players never read it; the rules compare against it on sign-up.
+    match /secrets/{id} {
+      allow read, write: if isAdmin();
+    }
+
+    // Organizers. Created by hand in the console for the first one (SETUP.md step 8).
+    match /admins/{uid} {
+      allow read: if signedIn() && (me() == uid || isAdmin());
+      allow write: if isAdmin();
+    }
+
+    // Player profiles hold email and phone: only the player and organizers can read them.
+    match /players/{uid} {
+      allow read: if signedIn() && (me() == uid || isAdmin());
+      allow create: if signedIn() && me() == uid
+        && request.resource.data.keys().hasOnly(['name', 'email', 'phone', 'joinCode', 'createdAt'])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 40
+        && request.resource.data.phone is string && request.resource.data.phone.size() <= 30
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.createdAt == request.time
+        && exists(/databases/$(database)/documents/secrets/league)
+        && request.resource.data.joinCode == leagueCode();
+      allow update, delete: if isAdmin();
+    }
+
+    // League Mondays and the course for each. Organizers edit; members read.
+    match /weeks/{date} {
+      allow read: if isMember() || isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // One document per Monday + time + bay, id "YYYY-MM-DD_early_3".
+    // uids = who's booked (max 4), names = uid -> calendar name.
+    match /slots/{slotId} {
+      allow read: if isMember() || isAdmin();
+      allow create: if isAdmin() || (isMember() && validNewSlot(slotId));
+      allow update: if isAdmin() || (isMember() && (joining() || leaving()));
+      allow delete: if isAdmin();
+
+      function validNewSlot(id) {
+        let d = request.resource.data;
+        return d.keys().hasOnly(['date', 'slot', 'bay', 'uids', 'names'])
+          && d.slot in ['early', 'late']
+          && d.bay in [3, 4]
+          && d.date is string
+          && id == d.date + '_' + d.slot + '_' + string(d.bay)
+          && exists(/databases/$(database)/documents/weeks/$(d.date))
+          && d.uids == [me()]
+          && d.names.keys().hasOnly([me()])
+          && d.names[me()] == myName();
+      }
+
+      function onlyRosterChanged() {
+        return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['uids', 'names'])
+          && request.resource.data.names.diff(resource.data.names).affectedKeys().hasOnly([me()])
+          && request.resource.data.uids.size() == request.resource.data.uids.toSet().size();
+      }
+
+      function joining() {
+        let before = resource.data.uids.toSet();
+        let after = request.resource.data.uids.toSet();
+        return onlyRosterChanged()
+          && request.resource.data.uids.size() <= 4
+          && after.difference(before) == [me()].toSet()
+          && before.difference(after).size() == 0
+          && request.resource.data.names[me()] == myName();
+      }
+
+      function leaving() {
+        let before = resource.data.uids.toSet();
+        let after = request.resource.data.uids.toSet();
+        return onlyRosterChanged()
+          && before.difference(after) == [me()].toSet()
+          && after.difference(before).size() == 0
+          && !(me() in request.resource.data.names);
+      }
+    }
+  }
+}
