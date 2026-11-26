@@ -252,3 +252,10 @@ table.data tr:hover td{background:#faf6ea}
 .check input{width:20px;height:20px}
 .bc-row{display:flex;justify-content:space-between;gap:10px;background:var(--paper);border-radius:12px;padding:10px 14px;font-size:14px}
 .bc-row b{display:block}
+
+/* admin: move / swap */
+.roster li{gap:4px 8px;flex-wrap:wrap;padding:4px 0;border-bottom:1px solid #f1ead8}
+.roster li:last-child{border-bottom:0}
+.roster .rn{flex:1 1 130px;min-width:0}
+.roster .ra{display:flex;gap:6px;align-items:center;flex:none;margin-left:auto}
+.roster select.mv{max-width:132px;min-height:36px;border-radius:8px;border:1px solid #e1d6b8;background:var(--field);font:13px Inter,sans-serif;padding:0 6px;color:var(--ink)}

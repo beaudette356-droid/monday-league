@@ -285,6 +285,37 @@ async function editRoster(id, fn) {
   });
 }
 
+// Move a player to another bay/time that night. If swapUid is given, that player goes
+// the other way (a straight swap, so both bays keep the same count).
+async function moveOrSwap(fromId, uid, toId, swapUid) {
+  const fromRef = doc(db, "slots", fromId), toRef = doc(db, "slots", toId);
+  const base = (id) => { const [date, slot, bay] = id.split("_"); return { date, slot, bay: Number(bay), uids: [], names: {} }; };
+  await runTransaction(db, async (tx) => {
+    const [fs, ts] = await Promise.all([tx.get(fromRef), tx.get(toRef)]);
+    const f = fs.exists() ? fs.data() : base(fromId), t = ts.exists() ? ts.data() : base(toId);
+    let fu = [...(f.uids || [])], tu = [...(t.uids || [])];
+    const fn = { ...(f.names || {}) }, tn = { ...(t.names || {}) };
+    const nm = fn[uid] || nameOf(uid);
+    if (!fu.includes(uid)) throw Object.assign(new Error("moved"), { code: "moved" });
+    fu = fu.filter((x) => x !== uid); delete fn[uid];
+    if (swapUid) {
+      if (!tu.includes(swapUid)) throw Object.assign(new Error("moved"), { code: "moved" });
+      const sn = tn[swapUid] || nameOf(swapUid);
+      tu = tu.filter((x) => x !== swapUid); delete tn[swapUid];
+      fu.push(swapUid); fn[swapUid] = sn;
+    }
+    if (!tu.includes(uid)) { tu.push(uid); tn[uid] = nm; }
+    if (tu.length > MAX) throw Object.assign(new Error("full"), { code: "full" });
+    tx.set(fromRef, { date: f.date, slot: f.slot, bay: Number(f.bay), uids: fu, names: fn });
+    tx.set(toRef, { date: t.date, slot: t.slot, bay: Number(t.bay), uids: tu, names: tn });
+  });
+  deleteDoc(doc(db, "waitlist", toId + "_" + uid)).catch(() => {});
+  if (swapUid) deleteDoc(doc(db, "waitlist", fromId + "_" + swapUid)).catch(() => {});
+  else if (fromId.slice(0, 10) >= todayIso()) queueOpening(fromId);
+}
+
+const slotLabel = (id) => { const [, slot, bay] = id.split("_"); return "Bay " + bay + " · " + ((LEAGUE.slots.find((s) => s.id === slot) || {}).time || slot); };
+
 function renderBookings() {
   if (!state.weeks.length) { panel.innerHTML = '<div class="panel" style="padding:20px">Add Mondays in Weekly courses first.</div>'; return; }
   if (!state.weeks.some((w) => w.date === state.bookWeek)) state.bookWeek = (nextWeek() || state.weeks[0]).date;
@@ -292,14 +323,34 @@ function renderBookings() {
   const w = state.weeks.find((x) => x.date === date);
   const bookedThatDay = new Set();
   for (const s of LEAGUE.slots) for (const b of LEAGUE.bays) roster(date, s.id, b).forEach((p) => bookedThatDay.add(p.uid));
-  const free = state.players.filter((p) => !bookedThatDay.has(p.uid));
+  const whereIs = {};
+  for (const s of LEAGUE.slots) for (const b of LEAGUE.bays) roster(date, s.id, b).forEach((p) => { whereIs[p.uid] = slotId(date, s.id, b); });
+  const allIds = [];
+  for (const s of LEAGUE.slots) for (const b of LEAGUE.bays) allIds.push(slotId(date, s.id, b));
+  const everyone = [...state.players].sort((a, b) => String(a.name).localeCompare(String(b.name)));
   const cards = [];
   for (const s of LEAGUE.slots) for (const b of LEAGUE.bays) {
     const ps = roster(date, s.id, b);
     const id = slotId(date, s.id, b);
+    const moveSel = (p) => {
+      const opts = [];
+      for (const other of allIds) {
+        if (other === id) continue;
+        const [, oSlot, oBay] = other.split("_");
+        const there = roster(date, oSlot, Number(oBay));
+        if (there.length < MAX) opts.push('<option value="' + esc(other) + '|">Move to ' + esc(slotLabel(other)) + "</option>");
+        there.forEach((q) => opts.push('<option value="' + esc(other) + "|" + esc(q.uid) + '">Swap with ' + esc(q.name) + " (" + esc(slotLabel(other)) + ")</option>"));
+      }
+      return '<select class="mv" aria-label="Move or swap ' + esc(p.name) + '" data-slot="' + esc(id) + '" data-uid="' + esc(p.uid) + '"><option value="">Move / swap…</option>' + opts.join("") + "</select>";
+    };
+    const addable = everyone.filter((p) => whereIs[p.uid] !== id);
     cards.push('<div class="roster"><div class="roster-top"><b>Bay ' + b + " · " + esc(s.time) + '</b><span class="nowrap">' + ps.length + " of " + MAX + "</span></div><ul>" +
-      (ps.map((p) => "<li><span>" + esc(p.name) + '</span><button type="button" class="x" aria-label="Remove ' + esc(p.name) + '" data-slot="' + esc(id) + '" data-uid="' + esc(p.uid) + '">×</button></li>').join("") || '<li class="muted" style="font-weight:400">Nobody yet</li>') +
-      "</ul>" + (waitersFor(id).length ? '<p class="waitline" style="margin:0 16px 12px">Waitlist: ' + waitersFor(id).map((w) => esc(w.name)).join(", ") + "</p>" : "") + (ps.length < MAX && free.length ? '<div class="roster-add"><select aria-label="Player to add" data-for="' + esc(id) + '"><option value="">Add a player…</option>' + free.map((p) => '<option value="' + esc(p.uid) + '">' + esc(p.name) + "</option>").join("") + '</select><button type="button" class="btn btn-dark btn-sm" data-add="' + esc(id) + '">Add</button></div>' : "") + "</div>");
+      (ps.map((p) => '<li><span class="rn">' + esc(p.name) + '</span><span class="ra">' + moveSel(p) + '<button type="button" class="x" aria-label="Remove ' + esc(p.name) + '" data-slot="' + esc(id) + '" data-uid="' + esc(p.uid) + '">×</button></span></li>').join("") || '<li class="muted" style="font-weight:400">Nobody yet</li>') +
+      "</ul>" + (waitersFor(id).length ? '<p class="waitline" style="margin:0 16px 12px">Waitlist: ' + waitersFor(id).map((w) => esc(w.name)).join(", ") + "</p>" : "") +
+      (ps.length < MAX && addable.length ? '<div class="roster-add"><select aria-label="Player to add" data-for="' + esc(id) + '"><option value="">Add a player…</option>' +
+        addable.map((p) => '<option value="' + esc(p.uid) + '">' + esc(p.name) + (whereIs[p.uid] ? " (moves from " + esc(slotLabel(whereIs[p.uid])) + ")" : "") + "</option>").join("") +
+        '</select><button type="button" class="btn btn-dark btn-sm" data-add="' + esc(id) + '">Add</button></div>' : "") +
+      (ps.length >= MAX ? '<p class="small muted" style="margin:0 16px 14px">Full. Use Move / swap on a player to trade spots.</p>' : "") + "</div>");
   }
   panel.innerHTML = '<section class="rise" style="display:flex;flex-direction:column;gap:14px">' +
     '<div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end"><label class="field" style="flex:0 1 320px">Monday<select id="bw">' +
@@ -321,10 +372,28 @@ function renderBookings() {
     const uid = sel && sel.value;
     if (!uid) { toast("Pick a player first.", "error"); return; }
     try {
-      await editRoster(id, (u, n) => { if (!u.includes(uid)) u.push(uid); n[uid] = nameOf(uid); return [u, n]; });
-      deleteDoc(doc(db, "waitlist", id + "_" + uid)).catch(() => {});
-      toast(nameOf(uid) + " added.");
+      if (whereIs[uid]) {
+        await moveOrSwap(whereIs[uid], uid, id, null);
+        toast(nameOf(uid) + " moved to " + slotLabel(id) + ".");
+      } else {
+        await editRoster(id, (u, n) => { if (!u.includes(uid)) u.push(uid); n[uid] = nameOf(uid); return [u, n]; });
+        deleteDoc(doc(db, "waitlist", id + "_" + uid)).catch(() => {});
+        toast(nameOf(uid) + " added.");
+      }
     } catch (err) { toast(err.code === "full" ? "That bay is full." : friendlyError(err), "error"); }
+  }));
+  panel.querySelectorAll("select.mv").forEach((sel) => sel.addEventListener("change", async () => {
+    if (!sel.value) return;
+    const [toId, swapUid] = sel.value.split("|");
+    const uid = sel.dataset.uid, fromId = sel.dataset.slot;
+    sel.disabled = true;
+    try {
+      await moveOrSwap(fromId, uid, toId, swapUid || null);
+      toast(swapUid ? nameOf(uid) + " and " + nameOf(swapUid) + " swapped." : nameOf(uid) + " moved to " + slotLabel(toId) + ".");
+    } catch (err) {
+      toast(err.code === "full" ? "That bay just filled up." : err.code === "moved" ? "The bookings changed. Try again." : friendlyError(err), "error");
+      sel.disabled = false; sel.value = "";
+    }
   }));
 }
 
