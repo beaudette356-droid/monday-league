@@ -1,5 +1,5 @@
 import {
-  collection, query, orderBy, onSnapshot, doc, runTransaction
+  collection, query, orderBy, onSnapshot, doc, runTransaction, setDoc, deleteDoc, serverTimestamp
 } from "./firebase.js";
 import {
   db, LEAGUE, esc, safeUrl, fmtDate, todayIso, initials, slotId,
@@ -11,9 +11,13 @@ const CHIPS = ["#bfe0c9", "#f3e1b3", "#cfe3f0", "#f6cfc4"];
 const SLOT_STYLE = { early: ["#fbf1d9", "#a87a1c"], late: ["#e4ecf4", "#2c5a86"] };
 const MAX = LEAGUE.maxPerBay;
 
-const state = { me: null, weeks: [], slots: {}, sel: null, fresh: null, busy: false, loadedWeeks: false };
+const state = {
+  me: null, weeks: [], slots: {}, waitlist: [], announcement: null,
+  sel: null, fresh: null, busy: false, loadedWeeks: false
+};
 
 wireSignOut();
+setupInstall();
 $("season-badge").textContent = LEAGUE.season + " · Every Monday night";
 
 const { user, profile, isAdmin } = await requireMember();
@@ -22,7 +26,7 @@ $("me-name").textContent = profile.name;
 $("me-ini").textContent = initials(profile.name);
 if (isAdmin) $("admin-link").classList.remove("hidden");
 
-// Live data: the season's Mondays and every bay roster. Small league, so one listener each.
+// Live data: Mondays, bay rosters, waitlists and the organizer's announcement.
 onSnapshot(query(collection(db, "weeks"), orderBy("date")), (snap) => {
   state.weeks = snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((w) => /^\d{4}-\d{2}-\d{2}$/.test(w.date || ""));
   state.loadedWeeks = true;
@@ -37,6 +41,16 @@ onSnapshot(collection(db, "slots"), (snap) => {
   render();
 }, (err) => toast(friendlyError(err), "error"));
 
+onSnapshot(collection(db, "waitlist"), (snap) => {
+  state.waitlist = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  render();
+}, () => { /* waitlist is optional; booking still works without it */ });
+
+onSnapshot(doc(db, "config", "announcement"), (snap) => {
+  state.announcement = snap.exists() ? snap.data() : null;
+  renderAnnouncement();
+}, () => { /* no announcement */ });
+
 function pickDefault() {
   const t = todayIso();
   const up = state.weeks.find((w) => w.date >= t);
@@ -47,6 +61,13 @@ function roster(date, slot, bay) {
   const s = state.slots[slotId(date, slot, bay)];
   if (!s || !Array.isArray(s.uids)) return [];
   return s.uids.map((uid) => ({ uid, name: (s.names && s.names[uid]) || "Player" }));
+}
+
+function waiting(date, slot, bay) {
+  const ms = (w) => (w.createdAt && typeof w.createdAt.toMillis === "function" ? w.createdAt.toMillis() : Number.MAX_SAFE_INTEGER);
+  return state.waitlist
+    .filter((w) => w.date === date && w.slot === slot && Number(w.bay) === Number(bay))
+    .sort((a, b) => ms(a) - ms(b));
 }
 
 function myBooking(date) {
@@ -61,6 +82,19 @@ function render() {
   renderDays();
   renderCourse();
   renderSlots();
+}
+
+function renderAnnouncement() {
+  const el = $("announce");
+  const a = state.announcement;
+  const text = a && a.show !== false ? String(a.text || "").trim() : "";
+  if (!text) { el.classList.add("hidden"); el.innerHTML = ""; return; }
+  const when = a.updatedAt && typeof a.updatedAt.toDate === "function"
+    ? a.updatedAt.toDate().toLocaleDateString("en-CA", { weekday: "short", month: "short", day: "numeric" }) : "";
+  el.innerHTML = '<span class="announce-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11v2a1 1 0 0 0 1 1h3l5 4V6L7 10H4a1 1 0 0 0-1 1z"/><path d="M16 8a5 5 0 0 1 0 8M19 5a9 9 0 0 1 0 14"/></svg></span>' +
+    '<div><b>From the organizer</b>' + (when ? ' <span class="announce-when">· ' + esc(when) + "</span>" : "") +
+    '<p>' + esc(text) + "</p></div>";
+  el.classList.remove("hidden");
 }
 
 function renderDays() {
@@ -86,7 +120,10 @@ function renderDays() {
     state.sel = b.dataset.date; state.fresh = null; render();
   }));
   const mb = state.sel && myBooking(state.sel);
-  $("my-status").textContent = mb ? "You're in Bay " + mb.bay + ", " + mb.slot.time + "." : "You're not booked for this Monday yet.";
+  const myWaits = state.sel ? state.waitlist.filter((w) => w.date === state.sel && w.uid === state.me.uid) : [];
+  let status = mb ? "You're in Bay " + mb.bay + ", " + mb.slot.time + "." : "You're not booked for this Monday yet.";
+  if (myWaits.length) status += " On the waitlist for " + myWaits.map((w) => "Bay " + w.bay + ", " + ((LEAGUE.slots.find((s) => s.id === w.slot) || {}).time || "")).join(" and ") + ".";
+  $("my-status").textContent = status;
 }
 
 const PLACEHOLDER = '<svg viewBox="0 0 600 360" preserveAspectRatio="xMidYMax slice" aria-hidden="true"><path d="M0 220 Q120 150 240 200 T480 170 T600 190 L600 360 L0 360 Z" fill="#e6cf95"/><path d="M0 260 Q160 210 320 250 T600 236 L600 360 L0 360 Z" fill="#7cb66f"/><path d="M0 300 Q200 268 380 296 T600 288 L600 360 L0 360 Z" fill="#5c9e58"/><ellipse cx="410" cy="270" rx="70" ry="14" fill="#9bd28c"/><line x1="420" y1="270" x2="420" y2="212" stroke="#fff" stroke-width="3"/><path d="M421 212 L448 220 L421 228 Z" fill="#c8341c"/></svg>';
@@ -128,6 +165,8 @@ function renderSlots() {
       const isMine = ps.some((p) => p.uid === state.me.uid);
       const full = !isMine && ps.length >= MAX;
       const id = slotId(date, s.id, b);
+      const wl = waiting(date, s.id, b);
+      const myPos = wl.findIndex((w) => w.uid === state.me.uid) + 1;
       const bars = Array.from({ length: MAX }, (_, i) => '<i class="' + (ps[i] ? (ps[i].uid === state.me.uid ? "me" : "on") : "") + '"></i>').join("");
       const seats = Array.from({ length: MAX }, (_, i) => {
         const p = ps[i];
@@ -136,21 +175,35 @@ function renderSlots() {
         const cls = me ? (state.fresh === id ? "av pop mine" : "av mine") : "av";
         return '<li class="seat"><span class="' + cls + '" style="background:' + (me ? "#ffd24a" : CHIPS[i % 4]) + '">' + esc(initials(p.name)) + '</span><span class="name">' + esc(p.name) + "</span>" + (me ? '<span class="you">You</span>' : "") + "</li>";
       }).join("");
+      const waitLine = wl.length
+        ? '<p class="waitline"><span class="waitdot" aria-hidden="true"></span>' + wl.length + " on the waitlist" + (myPos ? " · you're #" + myPos : "") + "</p>"
+        : "";
+      const attrs = ' data-slot="' + s.id + '" data-bay="' + b + '"';
       let btn;
       if (past) btn = '<button type="button" class="btn btn-quiet btn-block" disabled>This Monday has passed</button>';
-      else if (isMine) btn = '<button type="button" class="btn btn-outline btn-block" data-act="leave" data-slot="' + s.id + '" data-bay="' + b + '">Leave this bay</button>';
-      else if (full) btn = '<button type="button" class="btn btn-quiet btn-block" disabled>Full · ' + MAX + " of " + MAX + "</button>";
-      else btn = '<button type="button" class="btn btn-primary btn-block" data-act="join" data-slot="' + s.id + '" data-bay="' + b + '">' + (mine ? "Move me to Bay " + b : "Book Bay " + b) + "</button>";
+      else if (isMine) btn = '<button type="button" class="btn btn-outline btn-block" data-act="leave"' + attrs + '>Leave this bay</button>';
+      else if (full && myPos) btn = '<button type="button" class="btn btn-outline btn-block" data-act="unwait"' + attrs + '>Leave the waitlist</button>';
+      else if (full) btn = '<button type="button" class="btn btn-dark btn-block" data-act="wait"' + attrs + '>Full · Join the waitlist</button>';
+      else btn = '<button type="button" class="btn btn-primary btn-block" data-act="join"' + attrs + '>' + (mine ? "Move me to Bay " + b : "Book Bay " + b) + "</button>";
       return '<article class="bay' + (isMine ? " is-mine" : "") + '" style="animation-delay:' + (0.08 * n++) + 's">' +
         '<div class="bay-top"><span class="bay-num" aria-hidden="true">' + b + '</span><div class="bay-title"><b>Bay ' + b + "</b><span>" + ps.length + " of " + MAX + ' booked</span></div><div class="bars" aria-hidden="true">' + bars + "</div></div>" +
-        '<ul class="seats">' + seats + '</ul><div class="bay-foot">' + btn + "</div></article>";
+        '<ul class="seats">' + seats + "</ul>" + waitLine + '<div class="bay-foot">' + btn + "</div></article>";
     }).join("");
     return '<section><div class="slot-head"><span class="slot-icon" style="background:' + bg + ";color:" + fg + '">' + esc(s.short) + '</span><div><h2>' + esc(s.name) + '</h2><span class="when">' + esc(s.time) + " · " + esc(fmtDate(date, { weekday: "long", month: "long", day: "numeric" })) + '</span></div></div><div class="bays">' + cards + "</div></section>";
-  }).join("");
+  }).join("") +
+  '<p class="small muted" style="margin:0">Waitlist: if a spot opens in a full bay, everyone on its waitlist gets an email. The first to tap <b>Take the spot</b> gets it.</p>';
   el.querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", () => {
-    const bay = Number(b.dataset.bay);
-    if (b.dataset.act === "join") join(date, b.dataset.slot, bay, b); else leave(date, b.dataset.slot, bay, b);
+    const slot = b.dataset.slot, bay = Number(b.dataset.bay);
+    ({ join, leave, wait: joinWaitlist, unwait: leaveWaitlist })[b.dataset.act](date, slot, bay, b);
   }));
+}
+
+// Tell the reminder script a spot opened, so it can email the waitlist.
+async function queueOpening(date, slot, bay) {
+  try {
+    const id = slotId(date, slot, bay) + "_" + Date.now() + "_" + state.me.uid.slice(0, 6);
+    await setDoc(doc(db, "openings", id), { date, slot, bay, status: "new", createdAt: serverTimestamp() });
+  } catch { /* the booking change itself already succeeded */ }
 }
 
 async function join(date, slot, bay, btn) {
@@ -160,8 +213,10 @@ async function join(date, slot, bay, btn) {
   const targetId = slotId(date, slot, bay);
   const ids = [];
   for (const s of LEAGUE.slots) for (const b of LEAGUE.bays) ids.push(slotId(date, s.id, b));
+  let left = [];
   try {
     await runTransaction(db, async (tx) => {
+      left = [];
       const refs = ids.map((id) => doc(db, "slots", id));
       const snaps = await Promise.all(refs.map((r) => tx.get(r)));
       let target = null;
@@ -171,6 +226,7 @@ async function join(date, slot, bay, btn) {
         if (d && Array.isArray(d.uids) && d.uids.includes(me.uid)) {
           const names = { ...(d.names || {}) }; delete names[me.uid];
           tx.update(refs[i], { uids: d.uids.filter((u) => u !== me.uid), names });
+          left.push(d);
         }
       });
       const tref = doc(db, "slots", targetId);
@@ -186,8 +242,12 @@ async function join(date, slot, bay, btn) {
     });
     state.fresh = targetId;
     toast("You're booked in Bay " + bay + ". See you Monday!");
+    for (const d of left) queueOpening(d.date, d.slot, d.bay);
+    if (waiting(date, slot, bay).some((w) => w.uid === me.uid)) {
+      deleteDoc(doc(db, "waitlist", targetId + "_" + me.uid)).catch(() => {});
+    }
   } catch (err) {
-    toast(err.code === "full" ? "Someone just grabbed the last spot. Pick another bay." : friendlyError(err), "error");
+    toast(err.code === "full" ? "Someone just grabbed the last spot. You can join the waitlist." : friendlyError(err), "error");
   }
   state.busy = false;
   render();
@@ -197,19 +257,75 @@ async function leave(date, slot, bay, btn) {
   if (state.busy) return;
   state.busy = true; btn.disabled = true; btn.textContent = "Leaving…";
   const ref = doc(db, "slots", slotId(date, slot, bay));
+  let didLeave = false;
   try {
     await runTransaction(db, async (tx) => {
+      didLeave = false;
       const sn = await tx.get(ref);
       if (!sn.exists()) return;
       const d = sn.data();
       if (!Array.isArray(d.uids) || !d.uids.includes(state.me.uid)) return;
       const names = { ...(d.names || {}) }; delete names[state.me.uid];
       tx.update(ref, { uids: d.uids.filter((u) => u !== state.me.uid), names });
+      didLeave = true;
     });
     toast("You've left Bay " + bay + ".");
+    if (didLeave) queueOpening(date, slot, bay);
   } catch (err) {
     toast(friendlyError(err), "error");
   }
   state.busy = false;
   render();
+}
+
+async function joinWaitlist(date, slot, bay, btn) {
+  if (state.busy) return;
+  state.busy = true; btn.disabled = true; btn.textContent = "Joining…";
+  try {
+    await setDoc(doc(db, "waitlist", slotId(date, slot, bay) + "_" + state.me.uid), {
+      date, slot, bay, uid: state.me.uid, name: state.me.name, createdAt: serverTimestamp()
+    });
+    toast("You're on the waitlist for Bay " + bay + ". We'll email you if a spot opens.");
+  } catch (err) {
+    toast(friendlyError(err), "error");
+  }
+  state.busy = false;
+  render();
+}
+
+async function leaveWaitlist(date, slot, bay, btn) {
+  if (state.busy) return;
+  state.busy = true; btn.disabled = true; btn.textContent = "Leaving…";
+  try {
+    await deleteDoc(doc(db, "waitlist", slotId(date, slot, bay) + "_" + state.me.uid));
+    toast("You're off the waitlist for Bay " + bay + ".");
+  } catch (err) {
+    toast(friendlyError(err), "error");
+  }
+  state.busy = false;
+  render();
+}
+
+// ── Add to your phone ──
+function setupInstall() {
+  const btn = $("install-btn");
+  const dlg = $("install-dialog");
+  if (!btn || !dlg) return;
+  const standalone = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+  if (standalone) { btn.classList.add("hidden"); return; }
+  let deferred = null;
+  window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); deferred = e; });
+  btn.addEventListener("click", async () => {
+    if (deferred) {
+      deferred.prompt();
+      try { await deferred.userChoice; } catch { /* ignore */ }
+      deferred = null;
+      return;
+    }
+    const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+    $("install-ios").classList.toggle("hidden", !ios);
+    $("install-other").classList.toggle("hidden", ios);
+    if (typeof dlg.showModal === "function") dlg.showModal(); else dlg.setAttribute("open", "");
+  });
+  dlg.querySelector("[data-close]").addEventListener("click", () => dlg.close ? dlg.close() : dlg.removeAttribute("open"));
 }

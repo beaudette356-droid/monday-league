@@ -12,6 +12,7 @@ const CHIPS = ["#bfe0c9", "#f3e1b3", "#cfe3f0", "#f6cfc4"];
 const MAX = LEAGUE.maxPerBay;
 const state = {
   tab: "players", q: "", players: [], weeks: [], slots: {}, admins: [],
+  waitlist: [], broadcasts: [], announcement: null, annDraft: null, mailDraft: { subject: "", body: "" },
   editing: null, draft: {}, bookWeek: null, armed: null, pending: false, loaded: { p: false, w: false, s: false, a: false }
 };
 
@@ -35,10 +36,20 @@ onSnapshot(collection(db, "admins"), (snap) => {
   state.loaded.a = true; refresh();
 }, fail);
 
+onSnapshot(collection(db, "waitlist"), (snap) => {
+  state.waitlist = snap.docs.map((d) => ({ id: d.id, ...d.data() })); refresh();
+}, () => {});
+onSnapshot(query(collection(db, "broadcasts"), orderBy("createdAt", "desc")), (snap) => {
+  state.broadcasts = snap.docs.map((d) => ({ id: d.id, ...d.data() })); refresh();
+}, () => {});
+onSnapshot(doc(db, "config", "announcement"), (snap) => {
+  state.announcement = snap.exists() ? snap.data() : null; refresh();
+}, () => {});
+
 function fail(err) { toast(friendlyError(err), "error"); }
 
 document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => {
-  state.tab = t.dataset.tab; state.editing = null; state.armed = null;
+  state.tab = t.dataset.tab; state.editing = null; state.armed = null; state.annDraft = null;
   document.querySelectorAll(".tab").forEach((x) => x.setAttribute("aria-selected", String(x === t)));
   render();
 }));
@@ -84,7 +95,7 @@ function render() {
   const L = state.loaded;
   if (!(L.p && L.w && L.s && L.a)) return;
   renderKpis();
-  ({ players: renderPlayers, courses: renderCourses, bookings: renderBookings, settings: renderSettings })[state.tab]();
+  ({ players: renderPlayers, courses: renderCourses, bookings: renderBookings, messages: renderMessages, settings: renderSettings })[state.tab]();
 }
 
 function renderKpis() {
@@ -146,8 +157,12 @@ function renderRows() {
 async function removePlayer(uid) {
   // Take them out of every bay first, then delete the profile.
   for (const [id, s] of Object.entries(state.slots)) {
-    if (Array.isArray(s.uids) && s.uids.includes(uid)) await editRoster(id, (u, n) => { delete n[uid]; return [u.filter((x) => x !== uid), n]; });
+    if (Array.isArray(s.uids) && s.uids.includes(uid)) {
+      await editRoster(id, (u, n) => { delete n[uid]; return [u.filter((x) => x !== uid), n]; });
+      if (s.date >= todayIso()) queueOpening(id);
+    }
   }
+  for (const w of state.waitlist.filter((x) => x.uid === uid)) await deleteDoc(doc(db, "waitlist", w.id)).catch(() => {});
   await deleteDoc(doc(db, "players", uid));
 }
 
@@ -247,6 +262,17 @@ function renderCourses() {
 }
 
 // ── Bookings ──
+// Tells the reminder script a spot opened so it can email that bay's waitlist.
+async function queueOpening(id) {
+  const [date, slot, bay] = id.split("_");
+  try {
+    await setDoc(doc(db, "openings", id + "_" + Date.now() + "_admin"), { date, slot, bay: Number(bay), status: "new", createdAt: serverTimestamp() });
+  } catch { /* the removal itself already succeeded */ }
+}
+function waitersFor(id) {
+  const ms = (w) => (w.createdAt && typeof w.createdAt.toMillis === "function" ? w.createdAt.toMillis() : 0);
+  return state.waitlist.filter((w) => w.date + "_" + w.slot + "_" + w.bay === id).sort((a, b) => ms(a) - ms(b));
+}
 async function editRoster(id, fn) {
   const ref = doc(db, "slots", id);
   const [date, slot, bay] = id.split("_");
@@ -273,7 +299,7 @@ function renderBookings() {
     const id = slotId(date, s.id, b);
     cards.push('<div class="roster"><div class="roster-top"><b>Bay ' + b + " · " + esc(s.time) + '</b><span class="nowrap">' + ps.length + " of " + MAX + "</span></div><ul>" +
       (ps.map((p) => "<li><span>" + esc(p.name) + '</span><button type="button" class="x" aria-label="Remove ' + esc(p.name) + '" data-slot="' + esc(id) + '" data-uid="' + esc(p.uid) + '">×</button></li>').join("") || '<li class="muted" style="font-weight:400">Nobody yet</li>') +
-      "</ul>" + (ps.length < MAX && free.length ? '<div class="roster-add"><select aria-label="Player to add" data-for="' + esc(id) + '"><option value="">Add a player…</option>' + free.map((p) => '<option value="' + esc(p.uid) + '">' + esc(p.name) + "</option>").join("") + '</select><button type="button" class="btn btn-dark btn-sm" data-add="' + esc(id) + '">Add</button></div>' : "") + "</div>");
+      "</ul>" + (waitersFor(id).length ? '<p class="waitline" style="margin:0 16px 12px">Waitlist: ' + waitersFor(id).map((w) => esc(w.name)).join(", ") + "</p>" : "") + (ps.length < MAX && free.length ? '<div class="roster-add"><select aria-label="Player to add" data-for="' + esc(id) + '"><option value="">Add a player…</option>' + free.map((p) => '<option value="' + esc(p.uid) + '">' + esc(p.name) + "</option>").join("") + '</select><button type="button" class="btn btn-dark btn-sm" data-add="' + esc(id) + '">Add</button></div>' : "") + "</div>");
   }
   panel.innerHTML = '<section class="rise" style="display:flex;flex-direction:column;gap:14px">' +
     '<div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end"><label class="field" style="flex:0 1 320px">Monday<select id="bw">' +
@@ -283,7 +309,11 @@ function renderBookings() {
   $("bw").addEventListener("change", (e) => { state.bookWeek = e.target.value; render(); });
   panel.querySelectorAll(".x").forEach((b) => b.addEventListener("click", async () => {
     const uid = b.dataset.uid;
-    try { await editRoster(b.dataset.slot, (u, n) => { delete n[uid]; return [u.filter((x) => x !== uid), n]; }); toast("Removed."); } catch (err) { fail(err); }
+    try {
+      await editRoster(b.dataset.slot, (u, n) => { delete n[uid]; return [u.filter((x) => x !== uid), n]; });
+      if (b.dataset.slot.slice(0, 10) >= todayIso()) queueOpening(b.dataset.slot);
+      toast(waitersFor(b.dataset.slot).length ? "Removed. The waitlist will be emailed." : "Removed.");
+    } catch (err) { fail(err); }
   }));
   panel.querySelectorAll("[data-add]").forEach((b) => b.addEventListener("click", async () => {
     const id = b.dataset.add;
@@ -292,9 +322,56 @@ function renderBookings() {
     if (!uid) { toast("Pick a player first.", "error"); return; }
     try {
       await editRoster(id, (u, n) => { if (!u.includes(uid)) u.push(uid); n[uid] = nameOf(uid); return [u, n]; });
+      deleteDoc(doc(db, "waitlist", id + "_" + uid)).catch(() => {});
       toast(nameOf(uid) + " added.");
     } catch (err) { toast(err.code === "full" ? "That bay is full." : friendlyError(err), "error"); }
   }));
+}
+
+// ── Messages ──
+function renderMessages() {
+  const a = state.announcement || {};
+  if (state.annDraft === null) state.annDraft = String(a.text || "");
+  const live = a.text && a.show !== false;
+  const fmt = (t) => (t && typeof t.toDate === "function" ? t.toDate().toLocaleString("en-CA", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "just now");
+  const label = { queued: "Waiting to send (within 5 min)", sending: "Sending…", sent: "Sent", partial: "Paused at the daily email limit; resumes tomorrow", error: "Error" };
+  const recent = state.broadcasts.slice(0, 8).map((b) => '<div class="bc-row"><div><b>' + esc(b.subject || "(no subject)") + '</b><span class="muted">' + esc(fmt(b.createdAt)) + "</span></div>" +
+    '<span class="nowrap" style="font-weight:600">' + esc(label[b.status] || b.status || "") + (b.total ? " · " + esc((b.sentCount || 0) + " of " + b.total) : "") + "</span></div>").join("");
+  const d = state.mailDraft;
+  panel.innerHTML = '<section class="settings rise">' +
+    '<div class="panel announce-admin"><h2>Announcement banner</h2><p class="muted" style="margin:0">Shows at the top of the booking page for everyone. ' + (live ? "<b>Live now.</b>" : "Nothing is showing right now.") + "</p>" +
+      '<label class="field">Message<textarea id="ann-text" maxlength="600" placeholder="e.g. No league on Dec 28. Merry Christmas!">' + esc(state.annDraft) + "</textarea></label>" +
+      '<div style="display:flex;gap:10px;flex-wrap:wrap"><button type="button" class="btn btn-primary" id="ann-save">' + (live ? "Update banner" : "Post banner") + "</button>" +
+      (live ? '<button type="button" class="btn btn-quiet" id="ann-clear">Take it down</button>' : "") + "</div></div>" +
+    '<div class="panel announce-admin"><h2>Email all players</h2><p class="muted" style="margin:0">Goes to all ' + state.players.length + " players, one email each, from your Google account. Sends within about 5 minutes.</p>" +
+      '<label class="field">Subject<input type="text" id="mail-subject" maxlength="120" placeholder="e.g. Course change for Monday" value="' + esc(d.subject) + '"></label>' +
+      '<label class="field">Message<textarea id="mail-body" maxlength="4000" style="min-height:140px" placeholder="Write your message…">' + esc(d.body) + "</textarea></label>" +
+      '<button type="button" class="btn btn-dark" style="align-self:flex-start" id="mail-send">Send to everyone</button>' +
+      (recent ? '<h3 style="font-size:20px;margin-top:6px">Recent emails</h3>' + recent : "") + "</div></section>";
+  $("ann-text").addEventListener("input", (e) => { state.annDraft = e.target.value; });
+  $("ann-save").addEventListener("click", async () => {
+    const text = state.annDraft.trim();
+    if (!text) { toast("Write a message first.", "error"); return; }
+    try { await setDoc(doc(db, "config", "announcement"), { text: text.slice(0, 600), show: true, updatedAt: serverTimestamp(), by: user.uid }); toast("Banner is live."); } catch (err) { fail(err); }
+  });
+  const clr = $("ann-clear");
+  if (clr) clr.addEventListener("click", async () => {
+    try { await setDoc(doc(db, "config", "announcement"), { text: "", show: false, updatedAt: serverTimestamp(), by: user.uid }); state.annDraft = ""; toast("Banner taken down."); } catch (err) { fail(err); }
+  });
+  $("mail-subject").addEventListener("input", (e) => { d.subject = e.target.value; });
+  $("mail-body").addEventListener("input", (e) => { d.body = e.target.value; });
+  $("mail-send").addEventListener("click", async (e) => {
+    const subject = d.subject.trim(), body = d.body.trim();
+    if (!subject || !body) { toast("Add a subject and a message.", "error"); return; }
+    if (!arm("mail", e.currentTarget, "Tap again to email " + state.players.length + " players")) return;
+    state.armed = null;
+    try {
+      await setDoc(doc(db, "broadcasts", "b" + Date.now()), { subject: subject.slice(0, 120), body: body.slice(0, 4000), status: "queued", by: user.uid, createdAt: serverTimestamp() });
+      state.mailDraft = { subject: "", body: "" };
+      toast("Queued. It goes out within about 5 minutes.");
+      render();
+    } catch (err) { fail(err); }
+  });
 }
 
 // ── Settings ──

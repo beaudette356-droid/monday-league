@@ -90,5 +90,50 @@ service cloud.firestore {
           && !(me() in request.resource.data.names);
       }
     }
+
+    // Organizer's announcement banner (config/announcement). Members read; organizers write.
+    match /config/{id} {
+      allow read: if isMember() || isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // Waitlist for a full bay. One entry per player per bay, id "YYYY-MM-DD_early_3_<uid>".
+    match /waitlist/{id} {
+      allow read: if isMember() || isAdmin();
+      allow create: if isMember() && validWait(id);
+      allow delete: if signedIn() && (resource.data.uid == me() || isAdmin());
+      allow update: if isAdmin();
+
+      function validWait(id) {
+        let d = request.resource.data;
+        return d.keys().hasOnly(['date', 'slot', 'bay', 'uid', 'name', 'createdAt'])
+          && d.uid == me()
+          && d.name == myName()
+          && d.slot in ['early', 'late']
+          && d.bay in [3, 4]
+          && d.date is string
+          && d.createdAt == request.time
+          && id == d.date + '_' + d.slot + '_' + string(d.bay) + '_' + me()
+          && exists(/databases/$(database)/documents/weeks/$(d.date));
+      }
+    }
+
+    // "A spot just opened" notes for the email script. Anyone in the league can drop one in;
+    // only organizers (and the script) can read or change them.
+    match /openings/{id} {
+      allow create: if (isMember() || isAdmin())
+        && request.resource.data.keys().hasOnly(['date', 'slot', 'bay', 'status', 'createdAt'])
+        && request.resource.data.status == 'new'
+        && request.resource.data.slot in ['early', 'late']
+        && request.resource.data.bay in [3, 4]
+        && request.resource.data.date is string
+        && request.resource.data.createdAt == request.time;
+      allow read, update, delete: if isAdmin();
+    }
+
+    // "Email all players" requests. Organizers only; the email script sends them.
+    match /broadcasts/{id} {
+      allow read, write: if isAdmin();
+    }
   }
 }

@@ -1,0 +1,16 @@
+{
+  "name": "The Bunker East – Monday League",
+  "short_name": "Monday League",
+  "description": "Book your bay for The Bunker East Monday night league.",
+  "start_url": "./book.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b2a1f",
+  "theme_color": "#0b2a1f",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
