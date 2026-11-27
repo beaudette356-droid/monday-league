@@ -11,6 +11,10 @@ service cloud.firestore {
     function isMember() { return signedIn() && exists(/databases/$(database)/documents/players/$(me())); }
     function myName() { return get(/databases/$(database)/documents/players/$(me())).data.name; }
     function leagueCode() { return get(/databases/$(database)/documents/secrets/league).data.code; }
+    // Organizer closed this bay for the night (weeks/{date}.closed holds keys like "late_3").
+    function bayClosed(date, slot, bay) {
+      return (slot + '_' + string(bay)) in get(/databases/$(database)/documents/weeks/$(date)).data.get('closed', []);
+    }
 
     // League password. Players never read it; the rules compare against it on sign-up.
     match /secrets/{id} {
@@ -60,6 +64,7 @@ service cloud.firestore {
           && d.date is string
           && id == d.date + '_' + d.slot + '_' + string(d.bay)
           && exists(/databases/$(database)/documents/weeks/$(d.date))
+          && !bayClosed(d.date, d.slot, d.bay)
           && d.uids == [me()]
           && d.names.keys().hasOnly([me()])
           && d.names[me()] == myName();
@@ -78,7 +83,8 @@ service cloud.firestore {
           && request.resource.data.uids.size() <= 4
           && after.difference(before) == [me()].toSet()
           && before.difference(after).size() == 0
-          && request.resource.data.names[me()] == myName();
+          && request.resource.data.names[me()] == myName()
+          && !bayClosed(resource.data.date, resource.data.slot, resource.data.bay);
       }
 
       function leaving() {
@@ -114,7 +120,8 @@ service cloud.firestore {
           && d.date is string
           && d.createdAt == request.time
           && id == d.date + '_' + d.slot + '_' + string(d.bay) + '_' + me()
-          && exists(/databases/$(database)/documents/weeks/$(d.date));
+          && exists(/databases/$(database)/documents/weeks/$(d.date))
+          && !bayClosed(d.date, d.slot, d.bay);
       }
     }
 

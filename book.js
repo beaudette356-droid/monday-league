@@ -70,6 +70,11 @@ function waiting(date, slot, bay) {
     .sort((a, b) => ms(a) - ms(b));
 }
 
+function isClosed(date, slot, bay) {
+  const w = state.weeks.find((x) => x.date === date);
+  return !!(w && Array.isArray(w.closed) && w.closed.includes(slot + "_" + bay));
+}
+
 function myBooking(date) {
   for (const s of LEAGUE.slots) for (const b of LEAGUE.bays) {
     if (roster(date, s.id, b).some((p) => p.uid === state.me.uid)) return { slot: s, bay: b };
@@ -107,7 +112,7 @@ function renderDays() {
   const t = todayIso();
   el.innerHTML = state.weeks.map((w) => {
     let open = 0;
-    for (const s of LEAGUE.slots) for (const b of LEAGUE.bays) open += Math.max(0, MAX - roster(w.date, s.id, b).length);
+    for (const s of LEAGUE.slots) for (const b of LEAGUE.bays) if (!isClosed(w.date, s.id, b)) open += Math.max(0, MAX - roster(w.date, s.id, b).length);
     const mine = !!myBooking(w.date);
     const sel = w.date === state.sel;
     return '<button type="button" class="day' + (w.date < t ? " past" : "") + '" data-date="' + esc(w.date) + '" aria-pressed="' + sel + '">' +
@@ -163,6 +168,7 @@ function renderSlots() {
     const cards = LEAGUE.bays.map((b) => {
       const ps = roster(date, s.id, b);
       const isMine = ps.some((p) => p.uid === state.me.uid);
+      const closed = isClosed(date, s.id, b);
       const full = !isMine && ps.length >= MAX;
       const id = slotId(date, s.id, b);
       const wl = waiting(date, s.id, b);
@@ -170,23 +176,26 @@ function renderSlots() {
       const bars = Array.from({ length: MAX }, (_, i) => '<i class="' + (ps[i] ? (ps[i].uid === state.me.uid ? "me" : "on") : "") + '"></i>').join("");
       const seats = Array.from({ length: MAX }, (_, i) => {
         const p = ps[i];
-        if (!p) return '<li class="seat"><span class="open" aria-hidden="true">+</span><span class="empty">Open spot</span></li>';
+        if (!p) return closed
+          ? '<li class="seat"><span class="open" aria-hidden="true">–</span><span class="empty">Not available</span></li>'
+          : '<li class="seat"><span class="open" aria-hidden="true">+</span><span class="empty">Open spot</span></li>';
         const me = p.uid === state.me.uid;
         const cls = me ? (state.fresh === id ? "av pop mine" : "av mine") : "av";
         return '<li class="seat"><span class="' + cls + '" style="background:' + (me ? "#ffd24a" : CHIPS[i % 4]) + '">' + esc(initials(p.name)) + '</span><span class="name">' + esc(p.name) + "</span>" + (me ? '<span class="you">You</span>' : "") + "</li>";
       }).join("");
-      const waitLine = wl.length
+      const waitLine = closed ? '<p class="closed-msg">This bay has been released back to The Bunker for the night.</p>' : wl.length
         ? '<p class="waitline"><span class="waitdot" aria-hidden="true"></span>' + wl.length + " on the waitlist" + (myPos ? " · you're #" + myPos : "") + "</p>"
         : "";
       const attrs = ' data-slot="' + s.id + '" data-bay="' + b + '"';
       let btn;
       if (past) btn = '<button type="button" class="btn btn-quiet btn-block" disabled>This Monday has passed</button>';
+      else if (closed && !isMine) btn = '<button type="button" class="btn btn-quiet btn-block" disabled>Closed</button>';
       else if (isMine) btn = '<button type="button" class="btn btn-outline btn-block" data-act="leave"' + attrs + '>Leave this bay</button>';
       else if (full && myPos) btn = '<button type="button" class="btn btn-outline btn-block" data-act="unwait"' + attrs + '>Leave the waitlist</button>';
       else if (full) btn = '<button type="button" class="btn btn-dark btn-block" data-act="wait"' + attrs + '>Full · Join the waitlist</button>';
       else btn = '<button type="button" class="btn btn-primary btn-block" data-act="join"' + attrs + '>' + (mine ? "Move me to Bay " + b : "Book Bay " + b) + "</button>";
-      return '<article class="bay' + (isMine ? " is-mine" : "") + '" style="animation-delay:' + (0.08 * n++) + 's">' +
-        '<div class="bay-top"><span class="bay-num" aria-hidden="true">' + b + '</span><div class="bay-title"><b>Bay ' + b + "</b><span>" + ps.length + " of " + MAX + ' booked</span></div><div class="bars" aria-hidden="true">' + bars + "</div></div>" +
+      return '<article class="bay' + (isMine ? " is-mine" : "") + (closed ? " is-closed" : "") + '" style="animation-delay:' + (0.08 * n++) + 's">' +
+        '<div class="bay-top"><span class="bay-num" aria-hidden="true">' + b + '</span><div class="bay-title"><b>Bay ' + b + "</b><span>" + (closed ? "Closed" : ps.length + " of " + MAX + " booked") + '</span></div><div class="bars" aria-hidden="true">' + bars + "</div></div>" +
         '<ul class="seats">' + seats + "</ul>" + waitLine + '<div class="bay-foot">' + btn + "</div></article>";
     }).join("");
     return '<section><div class="slot-head"><span class="slot-icon" style="background:' + bg + ";color:" + fg + '">' + esc(s.short) + '</span><div><h2>' + esc(s.name) + '</h2><span class="when">' + esc(s.time) + " · " + esc(fmtDate(date, { weekday: "long", month: "long", day: "numeric" })) + '</span></div></div><div class="bays">' + cards + "</div></section>";

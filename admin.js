@@ -102,7 +102,8 @@ function renderKpis() {
   const nw = nextWeek();
   let booked = 0;
   if (nw) for (const s of LEAGUE.slots) for (const b of LEAGUE.bays) booked += roster(nw.date, s.id, b).length;
-  const cap = LEAGUE.slots.length * LEAGUE.bays.length * MAX;
+  let cap = 0;
+  for (const s of LEAGUE.slots) for (const b of LEAGUE.bays) if (!nw || !isClosed(nw.date, s.id, b)) cap += MAX;
   const set = state.weeks.filter((w) => w.course).length;
   const k = [
     ["Players", state.players.length],
@@ -228,7 +229,7 @@ function renderCourses() {
     const data = { date: state.editing };
     for (const k of FIELDS.map((f) => f[0]).concat(["blurb"])) data[k] = String(d[k] || "").trim().slice(0, k === "blurb" ? 600 : 200);
     save.disabled = true;
-    try { await setDoc(doc(db, "weeks", state.editing), data); state.editing = null; toast("Course saved."); render(); }
+    try { await setDoc(doc(db, "weeks", state.editing), data, { merge: true }); state.editing = null; toast("Course saved."); render(); }
     catch (err) { fail(err); save.disabled = false; }
   });
   const cancel = $("cancel-week");
@@ -314,6 +315,15 @@ async function moveOrSwap(fromId, uid, toId, swapUid) {
   else if (fromId.slice(0, 10) >= todayIso()) queueOpening(fromId);
 }
 
+// Closed bays are stored on the Monday as weeks/{date}.closed = ["late_3", "late_4", ...].
+const closedList = (date) => { const w = state.weeks.find((x) => x.date === date); return Array.isArray(w && w.closed) ? w.closed : []; };
+const isClosed = (date, slot, bay) => closedList(date).includes(slot + "_" + bay);
+async function setClosed(date, keys, close) {
+  const cur = new Set(closedList(date));
+  keys.forEach((k) => (close ? cur.add(k) : cur.delete(k)));
+  await setDoc(doc(db, "weeks", date), { closed: [...cur].sort() }, { merge: true });
+}
+
 const slotLabel = (id) => { const [, slot, bay] = id.split("_"); return "Bay " + bay + " · " + ((LEAGUE.slots.find((s) => s.id === slot) || {}).time || slot); };
 
 function renderBookings() {
@@ -344,18 +354,27 @@ function renderBookings() {
       return '<select class="mv" aria-label="Move or swap ' + esc(p.name) + '" data-slot="' + esc(id) + '" data-uid="' + esc(p.uid) + '"><option value="">Move / swap…</option>' + opts.join("") + "</select>";
     };
     const addable = everyone.filter((p) => whereIs[p.uid] !== id);
-    cards.push('<div class="roster"><div class="roster-top"><b>Bay ' + b + " · " + esc(s.time) + '</b><span class="nowrap">' + ps.length + " of " + MAX + "</span></div><ul>" +
+    const closed = isClosed(date, s.id, b);
+    const key = s.id + "_" + b;
+    cards.push('<div class="roster' + (closed ? " is-closed" : "") + '"><div class="roster-top"><b>Bay ' + b + " · " + esc(s.time) + '</b><span class="nowrap">' + ps.length + " of " + MAX + "</span></div><ul>" +
       (ps.map((p) => '<li><span class="rn">' + esc(p.name) + '</span><span class="ra">' + moveSel(p) + '<button type="button" class="x" aria-label="Remove ' + esc(p.name) + '" data-slot="' + esc(id) + '" data-uid="' + esc(p.uid) + '">×</button></span></li>').join("") || '<li class="muted" style="font-weight:400">Nobody yet</li>') +
       "</ul>" + (waitersFor(id).length ? '<p class="waitline" style="margin:0 16px 12px">Waitlist: ' + waitersFor(id).map((w) => esc(w.name)).join(", ") + "</p>" : "") +
       (ps.length < MAX && addable.length ? '<div class="roster-add"><select aria-label="Player to add" data-for="' + esc(id) + '"><option value="">Add a player…</option>' +
         addable.map((p) => '<option value="' + esc(p.uid) + '">' + esc(p.name) + (whereIs[p.uid] ? " (moves from " + esc(slotLabel(whereIs[p.uid])) + ")" : "") + "</option>").join("") +
         '</select><button type="button" class="btn btn-dark btn-sm" data-add="' + esc(id) + '">Add</button></div>' : "") +
-      (ps.length >= MAX ? '<p class="small muted" style="margin:0 16px 14px">Full. Use Move / swap on a player to trade spots.</p>' : "") + "</div>");
+      (ps.length >= MAX ? '<p class="small muted" style="margin:0 16px 14px">Full. Use Move / swap on a player to trade spots.</p>' : "") +
+      '<div class="roster-close">' + (closed
+        ? '<p class="closed-note">Closed to players' + (ps.length ? ". The " + ps.length + " booked stay booked." : ".") + '</p><button type="button" class="btn btn-outline btn-sm" data-reopen="' + key + '">Reopen bay</button>'
+        : '<button type="button" class="btn btn-quiet btn-sm" data-close="' + key + '">Close bay to players</button>') + "</div></div>");
   }
   panel.innerHTML = '<section class="rise" style="display:flex;flex-direction:column;gap:14px">' +
     '<div style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end"><label class="field" style="flex:0 1 320px">Monday<select id="bw">' +
     state.weeks.map((x) => '<option value="' + esc(x.date) + '"' + (x.date === date ? " selected" : "") + ">" + esc(fmtDate(x.date, { weekday: "short", month: "short", day: "numeric" }) + (x.course ? " · " + x.course : "")) + "</option>").join("") +
     '</select></label><p class="muted" style="margin:0 0 12px">' + esc(w && w.course ? w.course : "Course to be announced") + ". Remove someone who can't make it, or add a player who called you.</p></div>" +
+    '<div class="close-row">' + LEAGUE.slots.map((s) => {
+      const both = LEAGUE.bays.every((b) => isClosed(date, s.id, b));
+      return '<button type="button" class="btn ' + (both ? "btn-outline" : "btn-quiet") + ' btn-sm" data-' + (both ? "reopen" : "close") + '="' + LEAGUE.bays.map((b) => s.id + "_" + b).join(",") + '">' + (both ? "Reopen " : "Close ") + esc(s.time) + " (both bays)</button>";
+    }).join("") + "</div>" +
     '<div class="rosters">' + cards.join("") + "</div></section>";
   $("bw").addEventListener("change", (e) => { state.bookWeek = e.target.value; render(); });
   panel.querySelectorAll(".x").forEach((b) => b.addEventListener("click", async () => {
@@ -381,6 +400,19 @@ function renderBookings() {
         toast(nameOf(uid) + " added.");
       }
     } catch (err) { toast(err.code === "full" ? "That bay is full." : friendlyError(err), "error"); }
+  }));
+  panel.querySelectorAll("[data-close]").forEach((btn) => btn.addEventListener("click", async () => {
+    const keys = btn.dataset.close.split(",");
+    if (!arm("close:" + btn.dataset.close, btn, "Tap again to close")) return;
+    state.armed = null;
+    try {
+      await setClosed(date, keys, true);
+      toast((keys.length > 1 ? "Closed both bays" : "Bay closed") + ". Players can't book " + (keys.length > 1 ? "them" : "it") + " now.");
+    } catch (err) { fail(err); }
+  }));
+  panel.querySelectorAll("[data-reopen]").forEach((btn) => btn.addEventListener("click", async () => {
+    const keys = btn.dataset.reopen.split(",");
+    try { await setClosed(date, keys, false); toast((keys.length > 1 ? "Both bays reopened." : "Bay reopened.")); } catch (err) { fail(err); }
   }));
   panel.querySelectorAll("select.mv").forEach((sel) => sel.addEventListener("change", async () => {
     if (!sel.value) return;

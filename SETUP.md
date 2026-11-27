@@ -1,5 +1,15 @@
 # The Bunker East – Monday League: setup guide
 
+## Your live setup (Nov 25, 2026)
+
+- **Site:** https://beaudette356-droid.github.io/monday-league/
+- **Code:** https://github.com/beaudette356-droid/monday-league (GitHub Pages, `main` branch, root)
+- **Firebase project:** `bunker-east-league` (Spark plan, Firestore in Montréal)
+- **Done:** steps 1–6. Email/password sign-in on, database created, rules published, web app registered, settings in `config.js`, league password set, site uploaded, Pages on, github.io domain authorized.
+- **Still to do:** steps 7–10 (create your account, make yourself organizer, add Mondays and the first course, invite players).
+
+In the newer Firebase console layout, Authentication is under **Security**, and Firestore is under **Databases & Storage**.
+
 This gets the league site live on **GitHub Pages** (free hosting) with **Firebase** (free logins and database).
 Plan on about 20 minutes. Do the steps in order.
 
@@ -106,6 +116,7 @@ Send the league your site link and the league password. Players create their own
 
 - **Who signed up, emails, phones:** Admin › Players. You can also **Copy all emails** or **Download CSV**.
 - **Someone can't make it / called you to book:** Admin › Bookings. Pick the Monday and remove or add them.
+- **Move or swap players:** Admin › Bookings › **Move / swap…** next to a name. Move them to a bay with room, or swap them with someone in a full bay (both bays keep the same count). Picking an already-booked player in **Add a player…** moves them from their current bay.
 - **New course list:** Admin › Weekly courses › Set course.
 - **Change the league password:** Admin › Settings. People already signed up aren't affected.
 - **Remove a player:** Admin › Players › Remove (tap twice). To also delete their login, go to Firebase › Authentication › Users.
@@ -122,3 +133,36 @@ Bay numbers, times and the 4-per-screen cap live at the top of `config.js`. If y
 - **Password resets** are emailed from a `firebaseapp.com` address and sometimes land in spam. You can reword that email under Authentication › Templates.
 - **One booking per Monday** is enforced by the site, which moves you if you book another bay. The security rules cap each bay at 4 and only let players add or remove themselves, so nobody can bump someone else.
 - **Test it on your computer first (optional):** in this folder, run `python3 -m http.server 8000` and open <http://localhost:8000>. `localhost` is already an authorized domain in Firebase.
+
+## Security check (Nov 25, 2026)
+
+- **GitHub secret-scanning alert:** it flagged the Firebase web API key in `config.js`. That key is meant to be public: it is the auto-created Firebase **Browser key**, limited to 25 Firebase APIs, with no Gemini / Generative Language API.
+- **Website restriction added** (Google Cloud › APIs & Services › Credentials › Browser key). Allowed sites: `https://beaudette356-droid.github.io/*`, `https://bunker-east-league.firebaseapp.com/*`, `http://localhost:8000/*`. Tested: works from the live site, refused (403) from another website. If you ever test locally on a different port, add it there.
+- **Rules tested with no login:** reads of players, a player profile, the league password, organizers, Mondays and bookings were all refused (403), and so was creating a player profile.
+- **GitHub alert:** safe to close as a false positive (public Firebase web key, restricted, protected by security rules).
+
+## Email reminders (set up Nov 25, 2026)
+
+- **What:** a Google Apps Script in your Google account, **Monday League Reminders** (script.google.com). Every day at 6 PM Toronto time it checks whether tomorrow is a league Monday. If so, it emails each booked player their bay, time, course and who they're playing with, plus a **"Can't make it? Remove me"** button. You get a roster summary, and a separate email whenever someone removes themselves.
+- **Remove-me page:** a web app at `https://script.google.com/macros/s/AKfycby96bCO3tur0I-mqqFo_nz-imVI2_fnxieN0t8IqCErIPzRq21N_akq3q4b4Uqp8Sesjw/exec`. Each button carries a private code tied to that player and that Monday, so links can't be forged or reused for someone else. Opening the link only shows a confirm page; nothing changes until the player taps **Yes, remove me**, so email link-scanners can't remove anyone. Links expire after the Monday.
+- **Sends from:** your Gmail (beaudette356@gmail.com). Google allows 100 recipients a day from Apps Script on a personal account; a full league night is at most 16 players plus your summary.
+- **Handy functions (Run in the editor):** `previewReminders` lists who would be emailed for the next league Monday without sending anything; `sendTestToMe` emails you a sample.
+- **If you change the Remove-me page code** (`doGet`, `removeMe`, `Remove.html`), publish it via **Deploy › Manage deployments › Edit › New version**. The daily email job always uses the latest saved code.
+- **To pause reminders:** Apps Script › Triggers (clock icon) › delete the `sendReminders` trigger. Run `setup` again to bring it back.
+
+## Announcements, waitlist and home-screen app (added Nov 26, 2026)
+
+- **Announcement banner:** Admin › Messages › Announcement banner. Shows at the top of the booking page and inside the 6 PM reminder emails. "Take it down" hides it.
+- **Email all players:** Admin › Messages › Email all players. Queued, then sent within about 5 minutes from your Gmail, one email per player (replies come to you). Gmail allows about 100 emails a day; the script keeps 25 in reserve for reminders and finishes a big send the next day if it runs out. "Recent emails" shows the status.
+- **Waitlist:** when a bay is full, players see "Full · Join the waitlist". When a spot opens (someone leaves on the site, uses Remove me, moves bays, or you remove them in Admin), everyone on that bay's waitlist gets a "Take the spot" email. First to tap gets it; they're moved out of any other bay that night and you get an email. Each person hears about the same bay at most once every 20 minutes.
+- **No waitlist?** If a spot opens within 3 days of the Monday and nobody is waiting, players not booked that night get one heads-up email per Monday.
+- **Home-screen app:** "Add to phone" button on the booking page. Android/Chrome installs directly; iPhone shows the Safari Share › Add to Home Screen steps.
+- **Behind the scenes:** a `processQueue` trigger runs every 5 minutes in the "Monday League Reminders" Apps Script. The web app is on version 2 (same address). New database collections: `config`, `waitlist`, `openings`, `broadcasts`, covered by the updated rules.
+
+## Ideas for later (from the BenchApp comparison, Nov 26, 2026)
+
+1. ~~Announcements + email all players~~ (done Nov 26)
+2. ~~"A spot just opened" alerts + waitlist~~ (done Nov 26)
+3. **Dues tracking:** a Paid column in Admin › Players (amount, method, date) for e-Transfers and cash. Skip online card payments.
+4. **Scores and standings:** weekly gross/handicap/net entry and a season leaderboard. Biggest build; depends on the season format.
+5. ~~Home-screen app~~ (done Nov 26)
