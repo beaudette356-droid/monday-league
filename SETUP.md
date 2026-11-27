@@ -116,6 +116,8 @@ Send the league your site link and the league password. Players create their own
 
 - **Who signed up, emails, phones:** Admin › Players. You can also **Copy all emails** or **Download CSV**.
 - **Someone can't make it / called you to book:** Admin › Bookings. Pick the Monday and remove or add them.
+- **Close a bay (release it to The Bunker):** Admin › Bookings › **Close bay to players** (tap twice), or **Close 8 – 11 PM (both bays)** at the top. Players see it as Closed and can't book or join its waitlist; anyone already booked stays booked. **Reopen bay** undoes it.
+- **Automatic Friday release:** right after midnight Friday (between 12 and 1 AM Saturday), any bay with **nobody** booked for the coming Monday is closed automatically, and matt@golfbunker.ca gets one email listing the bays being released (you're copied, replies come to you). A bay with even one player stays open. You also get a summary. To see what it would do right now, run `previewRelease` in the Apps Script editor. To change Matt's address, edit `FACILITY_EMAIL` at the top of the script.
 - **Move or swap players:** Admin › Bookings › **Move / swap…** next to a name. Move them to a bay with room, or swap them with someone in a full bay (both bays keep the same count). Picking an already-booked player in **Add a player…** moves them from their current bay.
 - **New course list:** Admin › Weekly courses › Set course.
 - **Change the league password:** Admin › Settings. People already signed up aren't affected.

@@ -269,3 +269,9 @@ table.data tr:hover td{background:#faf6ea}
 .bay.is-closed{opacity:.92}
 .bay.is-closed .bay-top{background:#5b4a44}
 .closed-msg{margin:0 20px 12px;font-size:14px;font-weight:600;color:var(--flag-dark);background:#fbe3dd;border-radius:10px;padding:8px 12px}
+
+/* logo links to golfbunker.ca */
+.brand-site{display:inline-flex;border-radius:6px;transition:opacity .2s}
+.brand-site:hover{opacity:.85}
+.brand-site:focus-visible{outline:2px solid var(--sand-deep);outline-offset:4px}
+a.brand-tag{text-decoration:none}
