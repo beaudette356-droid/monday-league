@@ -10,6 +10,7 @@ const $ = (id) => document.getElementById(id);
 const CHIPS = ["#bfe0c9", "#f3e1b3", "#cfe3f0", "#f6cfc4"];
 const SLOT_STYLE = { early: ["#fbf1d9", "#a87a1c"], late: ["#e4ecf4", "#2c5a86"] };
 const MAX = LEAGUE.maxPerBay;
+const SHOW_WEEKS = 8; // players see this many upcoming Mondays; past Mondays drop off
 
 const state = {
   me: null, weeks: [], slots: {}, waitlist: [], announcement: null,
@@ -30,7 +31,7 @@ if (isAdmin) $("admin-link").classList.remove("hidden");
 onSnapshot(query(collection(db, "weeks"), orderBy("date")), (snap) => {
   state.weeks = snap.docs.map((d) => ({ id: d.id, ...d.data() })).filter((w) => /^\d{4}-\d{2}-\d{2}$/.test(w.date || ""));
   state.loadedWeeks = true;
-  if (!state.weeks.some((w) => w.date === state.sel)) state.sel = pickDefault();
+  if (!visibleWeeks().some((w) => w.date === state.sel)) state.sel = pickDefault();
   render();
 }, (err) => { $("days").innerHTML = '<div class="loading">' + esc(friendlyError(err)) + "</div>"; });
 
@@ -51,10 +52,15 @@ onSnapshot(doc(db, "config", "announcement"), (snap) => {
   renderAnnouncement();
 }, () => { /* no announcement */ });
 
-function pickDefault() {
+// Upcoming Mondays only (today's Monday stays visible until the day is over), at most SHOW_WEEKS.
+function visibleWeeks() {
   const t = todayIso();
-  const up = state.weeks.find((w) => w.date >= t);
-  return up ? up.date : (state.weeks.length ? state.weeks[state.weeks.length - 1].date : null);
+  return state.weeks.filter((w) => w.date >= t).slice(0, SHOW_WEEKS);
+}
+
+function pickDefault() {
+  const v = visibleWeeks();
+  return v.length ? v[0].date : null;
 }
 
 function roster(date, slot, bay) {
@@ -84,6 +90,8 @@ function myBooking(date) {
 
 function render() {
   if (!state.loadedWeeks) return;
+  // Page left open past midnight: move off a Monday that has just dropped off.
+  if (state.sel && !visibleWeeks().some((w) => w.date === state.sel)) { state.sel = pickDefault(); state.fresh = null; }
   renderDays();
   renderCourse();
   renderSlots();
@@ -104,13 +112,14 @@ function renderAnnouncement() {
 
 function renderDays() {
   const el = $("days");
-  if (!state.weeks.length) {
-    el.innerHTML = '<div class="loading">No Mondays are on the schedule yet. Check back soon.</div>';
+  const weeks = visibleWeeks();
+  if (!weeks.length) {
+    el.innerHTML = '<div class="loading">No upcoming Mondays on the schedule right now. Check back soon.</div>';
     $("my-status").textContent = "";
     return;
   }
   const t = todayIso();
-  el.innerHTML = state.weeks.map((w) => {
+  el.innerHTML = weeks.map((w) => {
     let open = 0;
     for (const s of LEAGUE.slots) for (const b of LEAGUE.bays) if (!isClosed(w.date, s.id, b)) open += Math.max(0, MAX - roster(w.date, s.id, b).length);
     const mine = !!myBooking(w.date);
@@ -119,7 +128,7 @@ function renderDays() {
       '<span class="m">' + esc(fmtDate(w.date, { month: "short" })) + "</span>" +
       '<span class="d">' + esc(fmtDate(w.date, { day: "numeric" })) + "</span>" +
       '<span class="tag' + (mine ? " booked" : "") + '">' + (mine ? "Booked" : open + " open") + "</span>" +
-      '<span class="c">' + esc(w.course || "Course TBA") + "</span></button>";
+      '<span class="c" title="' + esc(w.course || "Course TBA") + '">' + esc(w.course || "Course TBA") + "</span></button>";
   }).join("");
   el.querySelectorAll(".day").forEach((b) => b.addEventListener("click", () => {
     state.sel = b.dataset.date; state.fresh = null; render();
