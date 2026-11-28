@@ -199,7 +199,10 @@ function renderSlots() {
       let btn;
       if (past) btn = '<button type="button" class="btn btn-quiet btn-block" disabled>This Monday has passed</button>';
       else if (closed && !isMine) btn = '<button type="button" class="btn btn-quiet btn-block" disabled>Closed</button>';
-      else if (isMine) btn = '<button type="button" class="btn btn-outline btn-block" data-act="leave"' + attrs + '>Leave this bay</button>';
+      else if (isMine) btn = '<button type="button" class="btn btn-outline btn-block" data-act="leave"' + attrs + '>Leave this bay</button>' +
+        '<div class="cal-row"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/></svg>Add to calendar:' +
+        '<a href="' + esc(googleCalUrl(date, s, b)) + '" target="_blank" rel="noopener">Google</a>' +
+        '<a href="#" data-ics' + attrs + '>Apple / Outlook</a></div>';
       else if (full && myPos) btn = '<button type="button" class="btn btn-outline btn-block" data-act="unwait"' + attrs + '>Leave the waitlist</button>';
       else if (full) btn = '<button type="button" class="btn btn-dark btn-block" data-act="wait"' + attrs + '>Full · Join the waitlist</button>';
       else btn = '<button type="button" class="btn btn-primary btn-block" data-act="join"' + attrs + '>' + (mine ? "Move me to Bay " + b : "Book Bay " + b) + "</button>";
@@ -210,6 +213,11 @@ function renderSlots() {
     return '<section><div class="slot-head"><span class="slot-icon" style="background:' + bg + ";color:" + fg + '">' + esc(s.short) + '</span><div><h2>' + esc(s.name) + '</h2><span class="when">' + esc(s.time) + " · " + esc(fmtDate(date, { weekday: "long", month: "long", day: "numeric" })) + '</span></div></div><div class="bays">' + cards + "</div></section>";
   }).join("") +
   '<p class="small muted" style="margin:0">Waitlist: if a spot opens in a full bay, everyone on its waitlist gets an email. The first to tap <b>Take the spot</b> gets it.</p>';
+  el.querySelectorAll("[data-ics]").forEach((a) => a.addEventListener("click", (e) => {
+    e.preventDefault();
+    const s = LEAGUE.slots.find((x) => x.id === a.dataset.slot);
+    downloadIcs(date, s, Number(a.dataset.bay));
+  }));
   el.querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", () => {
     const slot = b.dataset.slot, bay = Number(b.dataset.bay);
     ({ join, leave, wait: joinWaitlist, unwait: leaveWaitlist })[b.dataset.act](date, slot, bay, b);
@@ -322,6 +330,69 @@ async function leaveWaitlist(date, slot, bay, btn) {
   }
   state.busy = false;
   render();
+}
+
+// ── Add to calendar ──
+const VENUE = "The Bunker East, 3928 Farmers Way, Unit 200, Carlsbad Springs, ON K0A 1K0";
+const SITE = "https://beaudette356-droid.github.io/monday-league/book.html";
+
+// Turn a Toronto wall-clock time on a date into a UTC Date (handles EST/EDT).
+function torontoTime(dateIso, hour) {
+  const [y, m, d] = dateIso.split("-").map(Number);
+  let t = Date.UTC(y, m - 1, d, hour + 5); // EST guess
+  for (let i = 0; i < 2; i++) {
+    const h = Number(new Intl.DateTimeFormat("en-CA", { timeZone: "America/Toronto", hour: "numeric", hourCycle: "h23" }).format(new Date(t)));
+    t += (hour - h) * 3600000;
+  }
+  return new Date(t);
+}
+function slotTimes(date, slot) {
+  const startHour = slot.id === "late" ? 20 : 17; // 8 PM or 5 PM, 3 hours each
+  const start = torontoTime(date, startHour);
+  return { start, end: new Date(start.getTime() + 3 * 3600000) };
+}
+const icsStamp = (d) => d.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+function calText(date, slot, bay) {
+  const w = state.weeks.find((x) => x.date === date) || {};
+  return {
+    title: "Monday League · Bay " + bay + " (" + slot.time + ")",
+    details: (w.course ? "Course: " + w.course + "\n" : "") + "Bay " + bay + ", " + slot.time + "\nBooking page: " + SITE
+  };
+}
+function googleCalUrl(date, slot, bay) {
+  const { start, end } = slotTimes(date, slot);
+  const t = calText(date, slot, bay);
+  return "https://calendar.google.com/calendar/render?action=TEMPLATE" +
+    "&text=" + encodeURIComponent(t.title) +
+    "&dates=" + icsStamp(start) + "/" + icsStamp(end) +
+    "&details=" + encodeURIComponent(t.details) +
+    "&location=" + encodeURIComponent(VENUE);
+}
+function downloadIcs(date, slot, bay) {
+  const { start, end } = slotTimes(date, slot);
+  const t = calText(date, slot, bay);
+  const icsEsc = (v) => String(v).replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\n/g, "\\n");
+  const ics = [
+    "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//The Bunker East//Monday League//EN", "CALSCALE:GREGORIAN", "METHOD:PUBLISH",
+    "BEGIN:VEVENT",
+    "UID:" + date + "-" + slot.id + "-" + bay + "-" + state.me.uid + "@bunker-east-league",
+    "DTSTAMP:" + icsStamp(new Date()),
+    "DTSTART:" + icsStamp(start), "DTEND:" + icsStamp(end),
+    "SUMMARY:" + icsEsc(t.title),
+    "DESCRIPTION:" + icsEsc(t.details),
+    "LOCATION:" + icsEsc(VENUE),
+    "URL:" + SITE,
+    "BEGIN:VALARM", "TRIGGER:-PT2H", "ACTION:DISPLAY", "DESCRIPTION:" + icsEsc(t.title), "END:VALARM",
+    "END:VEVENT", "END:VCALENDAR", ""
+  ].join("\r\n");
+  const name = "monday-league-" + date + ".ics";
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  if (ios) { location.href = "data:text/calendar;charset=utf-8," + encodeURIComponent(ics); return; }
+  const url = URL.createObjectURL(new Blob([ics], { type: "text/calendar;charset=utf-8" }));
+  const a = document.createElement("a");
+  a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  toast("Calendar file downloaded. Open it to add the event.");
 }
 
 // ── Add to your phone ──

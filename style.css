@@ -275,3 +275,8 @@ table.data tr:hover td{background:#faf6ea}
 .brand-site:hover{opacity:.85}
 .brand-site:focus-visible{outline:2px solid var(--sand-deep);outline-offset:4px}
 a.brand-tag{text-decoration:none}
+
+/* add to calendar */
+.cal-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin-top:10px;font-size:13px;font-weight:600;color:var(--muted)}
+.cal-row svg{flex:none}
+.cal-row a{color:var(--green-deep,#0e3b2c);text-decoration:underline;text-underline-offset:3px;padding:4px 0}
